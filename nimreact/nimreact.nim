@@ -10,29 +10,23 @@ type ReactElement* = ref object of RootObj
 type ReactTextElement* = ref object of ReactElement
     text: cstring
 
+type Props* = ref object of RootObj
+    pairs*: TableRef[string, JsObject]
 type Styles* = ref object of RootObj
-    pairs*: TableRef[string, string]
-type Attributes* = ref object of RootObj
     pairs*: TableRef[string, string]
 type Events* = ref object of RootObj
     pairs*: TableRef[EventType, int]
 
-proc newAttributes*(pairs: openarray[(string, string)]): Attributes = Attributes(pairs: pairs.newTable)
+proc newProps*(pairs: openarray[(string, JsObject)]): Props = Props(pairs: pairs.newTable)
+proc newProps*(pairs: openarray[(string, string)]): Props = pairs.map(proc(x: (string, string)): (string, JsObject) = (x[0], x[1].toJs)).newProps
 proc newEvents*(pairs: openarray[(EventType, int)]): Events = Events(pairs: pairs.newTable)
-proc newEvents*(items: openarray[EventType]): Events = 
+proc newEvents*(items: openarray[EventType]): Events =
     var pairs = newSeq[(EventType, int)](items.len)
     for i, item in items:
         pairs[i] = (item, i)
     pairs.newEvents
 proc newStyles*(pairs: openarray[(string, string)]): Styles = Styles(pairs: pairs.newTable)
 
-
-proc createElement(T: ReactComponent | cstring, attrs: JsObject, children: JsObject): ReactElement {.importc: "React.createElement".}
-proc reactDOMRender(re: ReactElement, de: Element) {.importc: "ReactDOM.render".}
-
-proc setState*(c: ReactComponent, data: JsObject) = {.emit: "`c`.setState(`data`)".}
-proc setState*(c: ReactComponent, cb: proc(prevState: JsObject): JsObject) = {.emit: "`c`.setState(`cb`)".}
-proc setState*(c: ReactComponent, cb: proc(prevState: JsObject, props: JsObject): JsObject) = {.emit: "`c`.setState(`cb`, `props`)".}
 
 proc getStateVal*(c: ReactComponent, key: string, T: typedesc): T = c.state[key.cstring].to(T)
 proc getPropVal*(c: ReactComponent, key: string, T: typedesc): T = c.props[key.cstring].to(T)
@@ -44,6 +38,15 @@ proc toProps*(props: openarray[(string, JsObject)]): JsObject =
     result = newJsObject()
     for value in props:
         result[value[0].cstring] = value[1]
+
+
+proc createElement(T: ReactComponent | cstring, attrs: JsObject, children: JsObject): ReactElement {.importc: "React.createElement".}
+proc reactDOMRender(re: ReactElement, de: Element) {.importc: "ReactDOM.render".}
+
+proc setState*(c: ReactComponent, data: JsObject) = {.emit: "`c`.setState(`data`)".}
+proc setState*(c: ReactComponent, data: openarray[(string, JsObject)]) = c.setState(data.toState)
+proc setState*(c: ReactComponent, cb: proc(prevState: JsObject): JsObject) = {.emit: "`c`.setState(`cb`)".}
+proc setState*(c: ReactComponent, cb: proc(prevState: JsObject, props: JsObject): JsObject) = {.emit: "`c`.setState(`cb`, `props`)".}
 
 
 method componentWillMount*(c: ReactComponent) {.base.} = discard
@@ -138,17 +141,17 @@ proc getChildren(): JsObject =
             result[i] = child.toJs()
     
     
-proc getAttrs(c: ReactComponent, attrs: Attributes, events: Events, styles: Styles): JsObject =
-    var ckey: string = ""
+proc getAttrs(c: ReactComponent, attrs: Props, events: Events, styles: Styles): JsObject =
+    var iskey = false
 
     result = newJsObject()
     if not attrs.isNil and not attrs.pairs.isNil:
         for key, value in attrs.pairs:
             if key == "key":
-                ckey = value
+                iskey = true
             result[key.cstring] = value.toJs()
     
-    if ckey == "":
+    if not iskey:
         result["key".cstring] = ($uniq).toJs()
         uniq.inc
     
@@ -162,7 +165,7 @@ proc getAttrs(c: ReactComponent, attrs: Attributes, events: Events, styles: Styl
             result[($kind).cstring] = (proc(d: EventData) = c.handleEvent(ExtendedEvent(kind: kind, id: id, data: d))).toJs()
 
 
-template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Attributes, events: Events, styles: Styles, genChildren: untyped): typed =
+template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Props, events: Events, styles: Styles, genChildren: untyped): typed =
     elements.add(newSeq[ReactElement]())
 
     genChildren
@@ -177,36 +180,36 @@ template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring |
     if elements.len > 0:
         elements[elements.len - 1].add(r)
 
-template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Attributes, events: Events, styles: Styles, genChildren: untyped): typed =
+template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Props, events: Events, styles: Styles, genChildren: untyped): typed =
     var r: ReactElement
     create(c, r, T, attrs, events, styles, genChildren)
 
 
 # Without Events
-template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Attributes, styles: Styles, genChildren: untyped): typed = create(c, r, T, attrs, nil, styles, genChildren)
-template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Attributes, styles: Styles, genChildren: untyped): typed = create(c, T, attrs, nil, styles, genChildren)
+template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Props, styles: Styles, genChildren: untyped): typed = create(c, r, T, attrs, nil, styles, genChildren)
+template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Props, styles: Styles, genChildren: untyped): typed = create(c, T, attrs, nil, styles, genChildren)
 
-# Without Attributes
+# Without Props
 template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, events: Events, styles: Styles, genChildren: untyped): typed = create(c, r, T, nil, events, styles, genChildren)
 template create*(c: ReactComponent, T: typedesc | cstring | string, events: Events, styles: Styles, genChildren: untyped): typed = create(c, T, nil, events, styles, genChildren)
 
 # Without Styles
-template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Attributes, events: Events, genChildren: untyped): typed = create(c, r, T, attrs, events, nil, genChildren)
-template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Attributes, events: Events, genChildren: untyped): typed = create(c, T, attrs, events, nil, genChildren)
+template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Props, events: Events, genChildren: untyped): typed = create(c, r, T, attrs, events, nil, genChildren)
+template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Props, events: Events, genChildren: untyped): typed = create(c, T, attrs, events, nil, genChildren)
     
-# Without Attributes, Events
+# Without Props, Events
 template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, styles: Styles, genChildren: untyped): typed = create(c, r, T, nil, nil, styles, genChildren)
 template create*(c: ReactComponent, T: typedesc | cstring | string, styles: Styles, genChildren: untyped): typed = create(c, T, nil, nil, styles, genChildren)
 
 # Without Events, Styles
-template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Attributes, genChildren: untyped): typed = create(c, r, T, attrs, nil, nil, genChildren)
-template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Attributes, genChildren: untyped): typed = create(c, T, attrs, nil, nil, genChildren)
+template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, attrs: Props, genChildren: untyped): typed = create(c, r, T, attrs, nil, nil, genChildren)
+template create*(c: ReactComponent, T: typedesc | cstring | string, attrs: Props, genChildren: untyped): typed = create(c, T, attrs, nil, nil, genChildren)
 
-# Without Attributes, Styles
+# Without Props, Styles
 template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, events: Events, genChildren: untyped): typed = create(c, r, T, nil, events, nil, genChildren)
 template create*(c: ReactComponent, T: typedesc | cstring | string, events: Events, genChildren: untyped): typed = create(c, T, nil, events, nil, genChildren)
 
-# Without Events, Attributes, Styles
+# Without Events, Props, Styles
 template create*(c: ReactComponent, r: var ReactElement, T: typedesc | cstring | string, genChildren: untyped): typed = create(c, r, T, nil, nil, nil, genChildren)
 template create*(c: ReactComponent, T: typedesc | cstring | string, genChildren: untyped): typed = create(c, T, nil, nil, nil, genChildren)
     
